@@ -35,10 +35,6 @@ public final class YPVideoFiltersVC: UIViewController, IsMediaFilterVC {
     private var imageGenerator: AVAssetImageGenerator?
     private var isFromSelectionVC = false
 
-    private let trimmerContainerView: UIView = {
-        let v = UIView()
-        return v
-    }()
     private let trimmerView: TrimmerView = {
         let v = TrimmerView()
         v.mainColor = YPConfig.colors.trimmerMainColor
@@ -48,32 +44,8 @@ public final class YPVideoFiltersVC: UIViewController, IsMediaFilterVC {
         v.minDuration = YPConfig.video.trimmerMinDuration
         return v
     }()
-    private let coverThumbSelectorView: ThumbSelectorView = {
-        let v = ThumbSelectorView()
-        v.thumbBorderColor = YPConfig.colors.coverSelectorBorderColor
-        v.isHidden = true
-        return v
-    }()
-    private lazy var trimBottomItem: YPMenuItem = {
-        let v = YPMenuItem()
-        v.textLabel.text = YPConfig.wordings.trim
-        v.button.addTarget(self, action: #selector(selectTrim), for: .touchUpInside)
-        return v
-    }()
-    private lazy var coverBottomItem: YPMenuItem = {
-        let v = YPMenuItem()
-        v.textLabel.text = YPConfig.wordings.cover
-        v.button.addTarget(self, action: #selector(selectCover), for: .touchUpInside)
-        return v
-    }()
     private let videoView: YPVideoView = {
         let v = YPVideoView()
-        return v
-    }()
-    private let coverImageView: UIImageView = {
-        let v = UIImageView()
-        v.contentMode = .scaleAspectFit
-        v.isHidden = true
         return v
     }()
 
@@ -93,26 +65,23 @@ public final class YPVideoFiltersVC: UIViewController, IsMediaFilterVC {
             .addObserver(self,
                          selector: #selector(itemDidFinishPlaying(_:)),
                          name: .AVPlayerItemDidPlayToEndTime,
-                         object: videoView.player.currentItem)
+                         object: nil)
         
         // Set initial video cover
         imageGenerator = AVAssetImageGenerator(asset: self.inputAsset)
         imageGenerator?.appliesPreferredTrackTransform = true
-        didChangeThumbPosition(CMTime(seconds: 1, preferredTimescale: 1))
     }
 
     override public func viewDidAppear(_ animated: Bool) {
         trimmerView.asset = inputAsset
         trimmerView.delegate = self
         
-        coverThumbSelectorView.asset = inputAsset
-        coverThumbSelectorView.delegate = self
+        title = YPConfig.wordings.trim
+        trimmerView.isHidden = false
+        videoView.isHidden = false
         
-        selectTrim()
         videoView.loadVideo(inputVideo)
-        videoView.showPlayImage(show: true)
-        startPlaybackTimeChecker()
-        
+
         super.viewDidAppear(animated)
     }
     
@@ -147,37 +116,13 @@ public final class YPVideoFiltersVC: UIViewController, IsMediaFilterVC {
     }
 
     private func setupLayout() {
-        view.subviews(
-            trimBottomItem,
-            coverBottomItem,
-            videoView,
-            coverImageView,
-            trimmerContainerView.subviews(
-                trimmerView,
-                coverThumbSelectorView
-            )
-        )
-
-        trimBottomItem.leading(0).height(40)
-        trimBottomItem.Bottom == view.safeAreaLayoutGuide.Bottom
-        trimBottomItem.Trailing == coverBottomItem.Leading
-        coverBottomItem.Bottom == view.safeAreaLayoutGuide.Bottom
-        coverBottomItem.trailing(0)
-        equal(sizes: trimBottomItem, coverBottomItem)
+        view.subviews(videoView, trimmerView)
 
         videoView.heightEqualsWidth().fillHorizontally().top(0)
-        videoView.Bottom == trimmerContainerView.Top
-
-        coverImageView.followEdges(videoView)
-
-        trimmerContainerView.fillHorizontally()
-        trimmerContainerView.Top == videoView.Bottom
-        trimmerContainerView.Bottom == trimBottomItem.Top
-
-        trimmerView.fillHorizontally(padding: 30).centerVertically()
-        trimmerView.Height == trimmerContainerView.Height / 3
-
-        coverThumbSelectorView.followEdges(trimmerView)
+        videoView.Bottom == trimmerView.Top - 49
+    
+        trimmerView.fillHorizontally(padding: 20)
+        trimmerView.Height == 100
     }
 
     // MARK: - Actions
@@ -204,10 +149,12 @@ public final class YPVideoFiltersVC: UIViewController, IsMediaFilterVC {
                 switch session.status {
                 case .completed:
                     DispatchQueue.main.async {
-                        if let coverImage = self?.coverImageView.image {
-                            let resultVideo = YPMediaVideo(thumbnail: coverImage,
-														   videoURL: destinationURL,
-														   asset: self?.inputVideo.asset)
+                        let leadTime = CMTime(seconds: 1, preferredTimescale: 1)
+                        if let imageGenerator = self?.imageGenerator,
+                           let imageRef = try? imageGenerator.copyCGImage(at: leadTime, actualTime: nil) {
+                            let resultVideo = YPMediaVideo(thumbnail: UIImage(cgImage: imageRef),
+                                                           videoURL: destinationURL,
+                                                           asset: self?.inputVideo.asset)
                             didSave(YPMediaItem.video(v: resultVideo))
                             self?.setupRightBarButtonItem()
                         } else {
@@ -227,55 +174,6 @@ public final class YPVideoFiltersVC: UIViewController, IsMediaFilterVC {
     
     @objc private func cancel() {
         didCancel?()
-    }
-
-    // MARK: - Bottom buttons
-
-    @objc private func selectTrim() {
-        title = YPConfig.wordings.trim
-        
-        trimBottomItem.select()
-        coverBottomItem.deselect()
-
-        trimmerView.isHidden = false
-        videoView.isHidden = false
-        coverImageView.isHidden = true
-        coverThumbSelectorView.isHidden = true
-    }
-    
-    @objc private func selectCover() {
-        title = YPConfig.wordings.cover
-        
-        trimBottomItem.deselect()
-        coverBottomItem.select()
-        
-        trimmerView.isHidden = true
-        videoView.isHidden = true
-        coverImageView.isHidden = false
-        coverThumbSelectorView.isHidden = false
-        
-        stopPlaybackTimeChecker()
-        videoView.stop()
-    }
-    
-    // MARK: - Various Methods
-
-    // Updates the bounds of the cover picker if the video is trimmed
-    // TODO: Now the trimmer framework doesn't support an easy way to do this.
-    // Need to rethink a flow or search other ways.
-    private func updateCoverPickerBounds() {
-        if let startTime = trimmerView.startTime,
-            let endTime = trimmerView.endTime {
-            if let selectedCoverTime = coverThumbSelectorView.selectedTime {
-                let range = CMTimeRange(start: startTime, end: endTime)
-                if !range.containsTime(selectedCoverTime) {
-                    // If the selected before cover range is not in new trimeed range,
-                    // than reset the cover to start time of the trimmed video
-                }
-            } else {
-                // If none cover time selected yet, than set the cover to the start time of the trimmed video
-            }
-        }
     }
     
     // MARK: - Trimmer playback
@@ -324,22 +222,11 @@ extension YPVideoFiltersVC: TrimmerViewDelegate {
         videoView.player.seek(to: playerTime, toleranceBefore: CMTime.zero, toleranceAfter: CMTime.zero)
         videoView.play()
         startPlaybackTimeChecker()
-        updateCoverPickerBounds()
     }
     
     public func didChangePositionBar(_ playerTime: CMTime) {
         stopPlaybackTimeChecker()
         videoView.pause()
         videoView.player.seek(to: playerTime, toleranceBefore: CMTime.zero, toleranceAfter: CMTime.zero)
-    }
-}
-
-// MARK: - ThumbSelectorViewDelegate
-extension YPVideoFiltersVC: ThumbSelectorViewDelegate {
-    public func didChangeThumbPosition(_ imageTime: CMTime) {
-        if let imageGenerator = imageGenerator,
-            let imageRef = try? imageGenerator.copyCGImage(at: imageTime, actualTime: nil) {
-            coverImageView.image = UIImage(cgImage: imageRef)
-        }
     }
 }
